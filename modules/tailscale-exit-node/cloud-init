@@ -1,0 +1,29 @@
+#cloud-config
+# This cloud-init configuration file is used to set up a Tailscale exit node.
+
+# Enable swap space to handle increased memory needs during tailscale installation.
+swap:
+  filename: /swapfile
+  size: 4G
+
+# Install software
+packages:
+  - curl
+
+# Write kernel sysctl settings for routing
+write_files:
+  - path: /etc/sysctl.d/99-tailscale.conf
+    permissions: '0644'
+    content: |
+      net.ipv4.ip_forward = 1
+      net.ipv6.conf.all.forwarding = 1
+
+runcmd:
+  # Apply kernel sysctl settings immediately
+  - sysctl -p /etc/sysctl.d/99-tailscale.conf
+
+  # Download and install Tailscale via official script
+  - curl -fsSL https://tailscale.com/install.sh | sh
+
+  # Enable, authenticate, and advertise as an exit node
+  - tailscale up --authkey="${tailscale_auth_key}" --advertise-exit-node --ssh

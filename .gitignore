@@ -1,0 +1,48 @@
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore editor files
+*.swp
+*.swo
+*.idea/
+.vscode/
+
+# Ignore node dev tooling (markdownlint-cli2, editorconfig-checker)
+node_modules/
+
+# Do not include private stuff
+/private
+/test
+
+# Secret files are allowed, as they are encrypted with SOPS
+# **/secrets/*
+
+# Allow template files for secrets to be committed
+!**/secrets/*.template
+!**/secrets/*.example
+
+# Ignore local Terraform/Ansible state if present
+*.tfstate
+*.tfstate.backup
+.terraform/
+*.retry
+inventory.ini
+terraform.tfvars
+*.auto.tfvars
+backend.conf
+
+# Ignore logs
+logs/
+*.log
+
+# Ignore built artifacts / Docker images if any
+*.tar
+*.img
+*.tmp
+
+# Ignore infra/talos secrets and configs..
+# **/secrets/*
+# **/configs/*
+# !**/secrets/*.example
+# !**/configs/*.example

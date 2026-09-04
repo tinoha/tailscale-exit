@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "terraform fmt": "allow",
+      "terraform fmt *": "allow",
+      "terraform validate": "allow",
+      "terraform validate *": "allow",
+      "terraform init -backend=false": "allow",
+      "terraform init -backend=false *": "allow",
+      "terraform providers schema": "allow",
+      "terraform providers schema *": "allow",
+      "terraform version": "allow",
+      "terraform version *": "allow",
+      "flux build kustomization *": "allow",
+      "flux version": "allow",
+      "kustomize build *": "allow",
+      "kustomize version": "allow",
+      "helm lint *": "allow",
+      "helm template *": "allow",
+      "helm list": "allow",
+      "helm list *": "allow",
+      "helm repo list": "allow",
+      "yq *": "allow",
+      "rm .terraform.lock.hcl": "allow",
+      "rm */.terraform.lock.hcl": "allow",
+      "rm modules/*/.terraform.lock.hcl": "allow"
+    }
+  }
+}

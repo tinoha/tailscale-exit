@@ -1,0 +1,15 @@
+{
+  "Verbose": false,
+  "exclude": [
+    "\\.ya?ml$",
+    "\\.md$",
+    "\\.sh$",
+    "\\.bash$",
+    "\\.tf$",
+    "\\.hcl$"
+  ],
+  "ignore": [
+    "node_modules/",
+    "\\.git/"
+  ]
+}
