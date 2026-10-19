@@ -35,8 +35,9 @@ variable "tailscale_auth_key" {
 }
 
 variable "admin_ssh_public_key" {
-  description = "SSH public key (OpenSSH format) authorized on the exit node VM. Supply via TF_VAR_admin_ssh_public_key."
+  description = "SSH public key (OpenSSH format) authorized on the exit node VM. Optional: Tailscale SSH works without it; only needed for OpenSSH. Supply via TF_VAR_admin_ssh_public_key."
   type        = string
+  default     = ""
 }
 
 variable "vm_size" {

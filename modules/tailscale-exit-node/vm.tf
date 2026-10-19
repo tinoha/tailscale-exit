@@ -12,9 +12,14 @@ resource "azurerm_linux_virtual_machine" "this" {
 
   tags = var.tags
 
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_ssh_public_key
+  # Without a key the platform still creates the admin user, just without an
+  # authorized key; Tailscale SSH authenticates via tailnet identity instead.
+  dynamic "admin_ssh_key" {
+    for_each = var.admin_ssh_public_key != "" ? [1] : []
+    content {
+      username   = var.admin_username
+      public_key = var.admin_ssh_public_key
+    }
   }
 
   os_disk {

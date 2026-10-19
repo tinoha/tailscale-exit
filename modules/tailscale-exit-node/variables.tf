@@ -36,8 +36,9 @@ variable "admin_username" {
 }
 
 variable "admin_ssh_public_key" {
-  description = "SSH public key (OpenSSH format) authorized for the VM admin user."
-  type = string
+  description = "SSH public key (OpenSSH format) authorized for the VM admin user. Optional: Tailscale SSH authenticates via tailnet identity and works without it; a key is only needed for OpenSSH (internet access additionally requires enable_ssh_access)."
+  type        = string
+  default     = ""
 }
 
 variable "vm_size" {
@@ -75,7 +76,7 @@ variable "enable_public_ipv6_address" {
 }
 
 variable "enable_ssh_access" {
-  description = "Create an NSG allowing inbound public SSH to the VM. Note: Tailscale SSH (--ssh in cloud-init) already covers SSH over the tailnet without this."
+  description = "Add an SSH allow rule (tcp/22 from anywhere) to the deny-by-default NSG that is always attached to the VM's NIC. Tailscale SSH (--ssh in cloud-init) already covers SSH over the tailnet without this."
   type        = bool
   default     = false
 }

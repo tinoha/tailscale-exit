@@ -1,49 +1,93 @@
-# prod — Tailscale exit node
+# Tailscale exit node (prod)
 
-Ephemeral Tailscale exit node VM in Azure, kept cheap via daily auto-shutdown
-and torn down with `terraform destroy` when not in use.
+An ephemeral Tailscale exit node on Azure — handy when you want your traffic
+to leave from another country, for example Japan. It runs on a small VM, shuts
+down nightly, and can be destroyed when you no longer need it.
 
-## Layout
+> **Not an anonymity tool.** Traffic exits through Azure under your own
+> subscription and account.
 
-- [`../../modules/networking`](../../modules/networking) — virtual network + subnet (addressing only, reusable)
-- [`../../modules/tailscale-exit-node`](../../modules/tailscale-exit-node) — VM, NIC, public IPs, NSG, auto-shutdown, Tailscale bootstrap
+## Prerequisites
 
-State is local (`backend.tf`) — a deliberate single-user choice. No parallel
-applies are expected.
+- An Azure subscription and a Tailscale account
+- Azure CLI (`az`) and Terraform ~> 1.16
+- A Tailscale auth key (ephemeral recommended)
+- An SSH public key (optional — only for plain OpenSSH)
 
-## The anchor resource group
+## Deploy
 
-`rg_name` points to a **pre-created resource group that Terraform never
-manages**. It exists as a static RBAC boundary: the Entra identity running
-`terraform apply` needs rights only inside it, while resources can be deployed
-into any `location` — the resource group's own region is irrelevant.
+1. Log in and select your subscription:
 
-## Usage
+   ```bash
+   az login
+   az account set --subscription "<name-or-id>"
+   ```
 
-Prerequisites: Terraform ~> 1.16, Azure CLI logged in (`az login`) with rights
-on the anchor resource group.
+2. Create the anchor resource group. Terraform deploys into it but does not
+   manage it, so its region does not need to match the VM's:
 
-Required input variables are supplied via environment variables (never
-committed):
+   ```bash
+   az group create --name rg-tailscale-exit-node --location swedencentral
+   ```
 
-```sh
-export TF_VAR_tailscale_auth_key="tskey-auth-..." # ephemeral (reusable=false) key recommended
-export TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
+3. Create `terraform.tfvars` (gitignored) from the committed example:
 
-terraform init
-terraform plan
-terraform apply
-```
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+   Fill in `location` (for example `japaneast`) and your secrets. Override
+   `rg_name` if you used a different resource group name. `vm_size` defaults
+   to `Standard_B1ls`, which is not available in every region.
+
+   Secrets can instead be supplied via environment variables, so they never
+   touch a file — the SSH key is optional (only for plain OpenSSH):
+
+   ```bash
+   export TF_VAR_tailscale_auth_key="tskey-auth-..."
+   export TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"   # optional
+   ```
+
+4. Apply:
+
+   ```bash
+   terraform init
+   terraform plan
+   terraform apply
+   ```
+
+## Use
+
+1. In the Tailscale admin console, approve the new machine as an exit node
+   (Machines → your node → Edit exit node → Use as exit node).
+2. On a client, select it in the Tailscale app or run:
+
+   ```bash
+   tailscale set --exit-node=<node-name>
+   ```
+
+3. Connect over the tailnet if needed:
+
+   ```bash
+   ssh azureadmin@<node-name>
+   ```
+
+## Costs and cleanup
+
+- The VM shuts down daily at 21:00 in `auto_shutdown_timezone`
+- `terraform destroy` removes the VM, network and disks. Only the anchor resource
+  group is left untouched.
 
 ## Notes
 
-- **Deploying to another region**: flip `location`. Everything is recreated —
-  expected, since names embed the region. Check that `vm_size` (default
-  `Standard_B1ls`) exists in the target region and that the subscription has
-  quota there.
-- **SSH**: Tailscale SSH is enabled in cloud-init and covers access over the
-  tailnet. Public SSH (`enable_ssh_access = true` here) is a convenience; if
-  kept, narrow `ssh_allowed_source_prefixes` (defaults to the whole internet).
-- **Auth key**: injected into VM `custom_data`, therefore visible in state.
-  Use short-lived ephemeral keys to limit blast radius.
-- The auto-shutdown schedule fires at `auto_shutdown_time` (21:00 default).
+- The auth key is embedded in the VM's `custom_data` and is therefore visible
+  in Terraform state. Use a short-lived ephemeral key.
+- The VM's NIC carries an NSG that denies all inbound traffic from the
+  internet. SSH over the tailnet uses Tailscale SSH; internet-facing SSH is
+  opt-in via `enable_ssh_access = true` in `main.tf`.
+- State is local (`backend.tf`), so this setup assumes a single operator.
+
+## Layout
+
+- [`../../modules/networking`](../../modules/networking) — VNet and subnet
+- [`../../modules/tailscale-exit-node`](../../modules/tailscale-exit-node) — VM, networking, auto-shutdown, Tailscale bootstrap

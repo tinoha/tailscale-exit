@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in your values (gitignored).
+
+location             = "japaneast"
+rg_name              = "rg-tailscale-exit-node"
+project              = "tailscale"
+environment          = "prod"
+tailscale_auth_key   = "tskey-auth-..."
+admin_ssh_public_key = "ssh-ed25519 AAAA..."
+
+# vm_size = "Standard_B1ls"
