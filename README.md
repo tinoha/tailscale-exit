@@ -1,230 +1,222 @@
 # Tailscale exit node on Azure
 
-An ephemeral, private Tailscale exit node running on Azure. Spin it up when you
-need your traffic to leave from another region, use it, then destroy it.
-Relocating the node to another region is a one-variable change — the whole
-footprint is recreated, so it is a destroy-and-redeploy by design.
+A personal Tailscale exit node running on an Azure VM. Deploy it in the region you want, use it when needed, then destroy it.
 
-This is a small Terraform project built to demonstrate a few things I care
-about: a fixed **anchor resource group** as an RBAC boundary, resource names
-that embed their deployment context, and a clean split between networking and
-workload. It is also a bit of fun — everyone should have their own VPN.
+This is a small Terraform project to experiment with Azure, Tailscale and disposable infrastructure. It also demonstrates a fixed resource group as an RBAC boundary, region-specific resource naming, and modules organized by lifecycle.
 
-> **Not an anonymity tool.** Traffic exits through Azure under your own
-> subscription and account. Tailscale (and Azure) can see the same things your
-> normal cloud provider would.
+**Not an anonymity tool.** Traffic exits through Azure using your own subscription. Your Azure account and the infrastructure you deploy may be traceable to you. A VPN changes your apparent public IP address; it does not make you anonymous.
 
 ## How it works
 
-```
-                        Tailscale tailnet
-  ┌──────────────┐            │            ┌──────────────────────────────┐
-  │ Laptop       │────────────┤            │ Azure subscription           │
-  │ (exit-node   │            │            │                              │
-  │  client)     │            └───────────▶│  Anchor RG (fixed region)    │
-  └──────────────┘                         │  └─ VNet + subnet            │
-                                           │     └─ Exit node VM          │
-                                           │        (selected region)     │
-                                           └──────────────────────────────┘
-```
+Your client connects to your Tailscale tailnet and uses the Azure VM as an exit node. Internet traffic routed through the exit node leaves from Azure rather than your local network.
 
-The VM advertises itself as an exit node via cloud-init:
+The deployment consists of a VNet, subnet, VM, public IP addresses, NIC, NSG and an automatic shutdown schedule.
 
-```bash
-tailscale up --authkey=... --advertise-exit-node --ssh
-```
-
-Approve the route in the Tailscale admin console, select the node on a client,
-and your traffic egresses from the VM's Azure region.
-
-## Design decisions
-
-**The anchor resource group is not managed by Terraform.** It is created
-out-of-band and referenced with a `data` lookup. Terraform deploys *into* it but
-never creates or destroys it. This gives you a stable RBAC boundary: the
-identity running the configuration only needs rights inside that one group, and
-`terraform destroy` can never remove the group itself. The group's own region is
-irrelevant — every resource is placed in `var.location`, which may differ.
-
-**The region is part of every resource name.** Names follow
-`<type>-<project>-<environment>-<location>`, for example
-`vm-tailscale-prod-japaneast`. Because the region is embedded in the names,
-changing `var.location` replaces the network, IPs, NIC and VM. The documented
-path for relocating is a clean `terraform destroy` → change → `terraform apply`.
-The anchor resource group stays untouched.
-
-**Modules are split by lifecycle, not by resource type.** `networking` owns
-addressing only (VNet and subnet). VM-bound resources — public IPs, NIC, NSG and
-the shutdown schedule — live in `tailscale-exit-node` next to the VM they are
-replaced with. The shared network is never coupled to one workload.
-
-**Cost is kept deliberately low.** The default size is `Standard_B1ls`, the OS
-disk is `Standard_LRS`, and a daily auto-shutdown schedule stops the VM at
-21:00 local time (configurable, `FLE Standard Time` by default). Auto-shutdown
-is a safety net for a forgotten node; it is not a substitute for
-`terraform destroy`.
-
-**Secure by default.** The VM's NIC always carries an NSG that denies all
-inbound traffic from the internet — nothing is reachable unless you opt in.
-SSH over the tailnet uses Tailscale SSH: authentication is your tailnet
-identity (with a periodic browser check prompt), not an SSH key — it works
-without providing one. The `admin_ssh_public_key` is optional and only needed
-for plain OpenSSH (which additionally requires `enable_ssh_access = true`,
-adding a tcp/22 allow rule to the otherwise empty NSG). The auth key is an
-ephemeral, single-use key; it is injected into the VM's `custom_data` and is
-therefore visible in Terraform state — use short-lived keys.
-
-## Repository layout
-
-```
-.
-├── environments/
-│   └── prod/                     # deployable root module
-│       ├── main.tf               # anchor lookup, modules, feature flags
-│       ├── variables.tf          # location, naming, secrets, VM size
-│       ├── outputs.tf            # VM name/ID and addresses
-│       ├── terraform.tfvars.example # variable template; copy to terraform.tfvars
-│       ├── backend.tf            # local state
-│       ├── providers.tf          # azurerm + resource provider registration
-│       └── versions.tf           # Terraform and provider constraints
-└── modules/
-    ├── networking/               # VNet + subnet (addressing only)
-    └── tailscale-exit-node/      # VM, IPs, NIC, NSG, shutdown, cloud-init
-```
+The anchor resource group is created manually; the examples use `swedencentral` for it and `japaneast` for the workload. These regions are independent and can be different.
 
 ## Requirements
 
-| Tool      | Version   |
-|-----------|-----------|
-| Terraform | `~> 1.16` |
-| azurerm   | `~> 5.3`  |
-| Azure CLI | current   |
-
-You also need an Azure subscription, a Tailscale account and a Tailscale auth
-key (ephemeral, `reusable=false`, recommended). An SSH public key is optional —
-only needed if you want plain OpenSSH to the VM.
+- An Azure subscription with permission to deploy the required resources.
+- [Terraform](https://developer.hashicorp.com/terraform/install) compatible with the version constraints in this repository.
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli).
+- A [Tailscale](https://tailscale.com/) account and an auth key configured for ephemeral, single-use registration.
+- An SSH public key if you want direct OpenSSH access to the VM.
 
 ## Quickstart
 
-1. Log in and select the subscription:
+### 1. Log in to Azure
 
-   ```bash
-   az login
-   az account set --subscription "<name-or-id>"
-   ```
+```bash
+az login
+az account set --subscription "<name-or-id>"
+```
 
-2. Create the anchor resource group once. Terraform deploys into it but does not
-   manage it, so its region does not need to match the exit node's:
+Make sure you have selected the subscription where you want to deploy the resources.
 
-   ```bash
-   az group create --name rg-tailscale-exit-node --location swedencentral
-   ```
+### 2. Create the anchor resource group
 
-3. Create your `terraform.tfvars` from the committed example — the real file
-   is gitignored and stays local:
+Create the resource group once. Terraform references it but does not create or delete it.
 
-   ```bash
-   cd environments/prod
-   cp terraform.tfvars.example terraform.tfvars
-   ```
+```bash
+az group create \
+  --name rg-tailscale-exit-node \
+  --location swedencentral
+```
 
-   ```hcl
-   location           = "japaneast"
-   tailscale_auth_key = "tskey-auth-..."   # ephemeral (reusable=false)
-   ```
+The resource group's region does not determine the workload region.
 
-   Everything else has a default; see [`environments/prod/README.md`](environments/prod/README.md)
-   for the full variable list. Alternatively, keep secrets out of files and
-   supply them via environment variables instead:
+### 3. Create a Tailscale auth key
 
-   ```bash
-   export TF_VAR_tailscale_auth_key="tskey-auth-..."
-   export TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"   # optional
-   ```
+In the Tailscale admin console, create an auth key with these recommended settings:
+- **Ephemeral**: enabled. The node is automatically removed from the tailnet after it goes offline and is detected as ephemeral and inactive. This avoids leaving stale machine entries after terraform destroy.
+- **Reusable**: disabled. The key can register only one node.
+- **Expiration**: a short validity period, such as one day. Expiration determines how long the key can be used to register a device, not how long an already-registered node remains in the tailnet.
 
-4. Apply:
+These are recommended defaults, not requirements imposed by the Terraform configuration. Choose the key validity period and reuse settings according to your needs.
 
-   ```bash
-   terraform init
-   terraform plan
-   terraform apply
-   ```
+The auth key is passed to the VM through cloud-init. Assume that it remains accessible within the VM's provisioning data and may be present in Terraform state. Protect both accordingly.
 
-5. In the Tailscale admin console, approve the new machine as an exit node
-   (Machines → your node → Edit exit node → Use as exit node).
+### 4. Configure the deployment
 
-6. On a client, select the exit node:
-
-   ```bash
-   tailscale set --exit-node=<node-name>
-   ```
-
-   Or connect to the VM over the tailnet (Tailscale SSH may ask for a browser
-   check):
-
-   ```bash
-   ssh azureadmin@<node-name>
-   ```
-
-## Moving the node to another region
-
-Changing `location` replaces every workload resource, so destroy first and
-re-apply cleanly:
+Clone the repository and create your local configuration file:
 
 ```bash
 cd environments/prod
+cp terraform.tfvars.example terraform.tfvars
+```
 
-terraform destroy
+Set the target region (`location`) and Tailscale auth key in `terraform.tfvars`:
 
-# edit terraform.tfvars: location = "japaneast"
+```hcl
+location           = "japaneast"
+tailscale_auth_key = "tskey-auth-..."
+```
 
+The other variables have defaults. See [`environments/prod/README.md`](environments/prod/README.md) for the complete variable reference.
+
+Alternatively, you may supply the auth key as an environment variable:
+
+```bash
+export TF_VAR_tailscale_auth_key="tskey-auth-..."
+```
+
+If you want direct OpenSSH access, set `admin_ssh_public_key` as described in the variable reference. OpenSSH access from the internet additionally requires setting `enable_ssh_access = true` in `environments/prod/main.tf`; the NSG denies all inbound traffic until then. Only provide your public key, never your private key.
+
+Treat the auth key and Terraform state as sensitive data.
+
+### 5. Deploy
+
+From `environments/prod`, run:
+
+```bash
+terraform init
+terraform plan
 terraform apply
 ```
 
-The anchor resource group is left untouched. After applying, approve the new
-node as an exit node in the admin console — it is a new machine to Tailscale.
+Review the plan before applying it.
 
-Two things to check when relocating:
+Terraform creates the workload in the configured region. The outputs include the VM details and its private IPv4, public IPv4 and public IPv6 addresses.
 
-- **VM size availability** — `Standard_B1ls` is not offered in every region.
-  Set `vm_size` to a size that exists in the target region.
-- **Auto-shutdown timezone** — the schedule uses a Windows timezone name
-  (`FLE Standard Time` by default), independent of the Azure region.
+Allow time for the VM to initialize and register with Tailscale.
 
-## Cleanup
+### 6. Approve and select the exit node
+
+In the [Tailscale admin console](https://login.tailscale.com/admin/machines), locate the new machine and approve it for exit-node use if required.
+
+On a client, select the new exit node:
 
 ```bash
-cd environments/prod
+tailscale set --exit-node=<node-name>
+```
+
+Replace `<node-name>` with the machine's Tailscale name. You can also select the exit node in the Tailscale client application.
+
+Verify that traffic exits through Azure:
+
+```bash
+curl https://ifconfig.me
+```
+
+The reported public IP should correspond to the Azure VM's outbound internet address.
+
+To stop using the exit node, deselect it in your Tailscale client.
+
+## Configuration
+
+The project provides defaults for the main deployment settings, so only a few variables are normally needed.
+
+| Setting | Default or behavior |
+|---|---|
+| Anchor resource group | `rg-tailscale-exit-node`, created manually |
+| Anchor resource group region | `swedencentral` in the example |
+| Azure region (`location`) | `swedencentral`; the example configuration uses `japaneast` |
+| VM size | `Standard_B1ls` |
+| OS disk | `Standard_LRS` |
+| Auto-shutdown | Daily at 21:00 |
+| Shutdown timezone | `FLE Standard Time` |
+| Inbound internet access | Denied by default |
+| Password-based SSH | Disabled |
+| SSH access (NSG rule) | Disabled unless explicitly enabled |
+
+See [`environments/prod/README.md`](environments/prod/README.md) for all variables and their defaults.
+
+VM sizes and other Azure resources may not be available in every region. Select a compatible VM size when deploying to a region that does not support the default.
+
+## Moving to another region
+
+Changing `location` changes the names of the workload resources and requires a replacement deployment. The intended relocation process is to destroy the current workload and deploy it again.
+
+From `environments/prod`:
+
+```bash
 terraform destroy
 ```
 
-This removes the VM, disks, network, public IPs and the shutdown schedule. The
-anchor resource group and anything else in it remain. If you are done for good,
-delete the group separately:
+Change `location` in `terraform.tfvars`, for example:
+
+```hcl
+location = "swedencentral"
+```
+
+Then deploy again:
+
+```bash
+terraform plan
+terraform apply
+```
+
+The anchor resource group remains untouched. The new VM registers as a new machine. Approve it for exit-node use if required, then select it on your client.
+
+Check VM size availability in the target region before applying.
+
+The auto-shutdown schedule uses a Windows timezone name. Its configured timezone is independent of the Azure region.
+
+## Cleanup
+
+From `environments/prod`, destroy the workload:
+
+```bash
+terraform destroy
+```
+
+This removes the VM and its OS disk, the NIC, the public IPs, the NSG, the shutdown schedule and the VNet with its subnet. The anchor resource group and anything else in it remain. If you are done for good, delete the group separately:
 
 ```bash
 az group delete --name rg-tailscale-exit-node
 ```
 
-## Notes and limitations
+## Security and limitations
+- **Not an anonymity tool.** Traffic exits through Azure using your own subscription. Microsoft can associate the deployed infrastructure with your Azure account and may be able to correlate network activity with the VM and its public IP addresses. A VPN changes your apparent public IP address; it does not make you anonymous.
+- **Inbound access is denied by default.** The VM NIC has an NSG with no custom inbound internet allow rules. Tailscale SSH is the intended access method. Password-based SSH authentication is disabled. Providing an SSH public key and setting `enable_ssh_access = true` enables key-based OpenSSH access from the internet.
+- **Protect the VM and Terraform state.** The Tailscale auth key is injected through cloud-init and may remain in the VM's provisioning data and Terraform state. Use an ephemeral, single-use key with a short validity period. Password-based SSH authentication is disabled, and inbound internet access is denied by default. A compromised VM may expose active Tailscale credentials, allow an attacker to use the node's tailnet access, and expose traffic passing through the exit node.
+- **Tailnet policy is your responsibility.** This project does not configure custom Tailscale grants or ACLs. Access depends on your existing tailnet policy; review it according to your requirements.
+- **Destroy when finished.** Auto-shutdown reduces the chance of leaving the VM running, but disks and other resources may still incur charges. See [Cleanup](#cleanup) for the teardown steps.
 
-- **The auth key is in Terraform state.** It is embedded in the VM's
-  `custom_data`. Use a short-lived ephemeral key and treat the state file as a
-  secret. State is local (`backend.tf`), so this setup assumes a single
-  operator.
-- **The exit node is a fresh machine after relocation.** Its name and public IPs
-  change; the old entry should be removed from the tailnet (ephemeral keys do
-  this automatically).
-- **Internet inbound is denied by the NSG.** Tailscale SSH over the tailnet is
-  the intended path. If a direct WireGuard path cannot open (inbound UDP is
-  blocked too), Tailscale relays via DERP automatically. Set
-  `enable_ssh_access = true` only if you need internet-facing SSH; it adds a
-  tcp/22 allow rule to the otherwise empty NSG.
-- **Exit nodes are trusted infrastructure.** A compromised exit node can
-  observe the traffic passing through it — inherent to using any exit node.
-  On tailnets with several devices, tailnet policy can further isolate the
-  node; see Tailscale's security documentation.
-- **Not an anonymity service.** See the note at the top.
+## Repository layout
+
+```text
+.
+├── environments/
+│   └── prod/                       # Deployable root module
+│       ├── main.tf                 # Anchor lookup and module configuration
+│       ├── variables.tf            # Deployment variables
+│       ├── outputs.tf              # VM details and addresses
+│       ├── terraform.tfvars.example
+│       ├── backend.tf              # Local state
+│       ├── providers.tf            # AzureRM provider configuration
+│       └── versions.tf             # Terraform and provider constraints
+└── modules/
+    ├── networking/                 # VNet and subnet
+    └── tailscale-exit-node/        # VM, IPs, NIC, NSG and shutdown
+```
+
+## Design decisions
+
+- **Fixed deployment boundary.** The anchor resource group is created outside Terraform and referenced as a data source. Terraform manages the workload inside it without owning the group itself.
+- **Region-specific naming.** Resource names include the deployment context and region. Changing the region replaces the workload rather than attempting an in-place migration.
+- **Modules organized by lifecycle.** Networking is separated from VM-bound resources so that network ownership and workload replacement remain distinct.
+- **Low-cost defaults.** A small VM, standard OS disk and automatic shutdown schedule reduce the cost of experimenting with the deployment.
 
 ## License
 

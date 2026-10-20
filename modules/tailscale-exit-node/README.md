@@ -1,10 +1,10 @@
 # tailscale-exit-node
 
-Creates an ephemeral Tailscale exit node VM in Azure: NIC, optional public
+Creates a Tailscale exit node VM in Azure: NIC, optional public
 IPv4/IPv6 addresses, an NSG that is always attached to the NIC and denies all
-inbound traffic from the internet (with an opt-in SSH allow rule), the VM
-itself, a daily auto-shutdown schedule (cost control) and a cloud-init
-bootstrap that installs Tailscale and advertises the node as an exit node.
+inbound traffic from the internet (outbound is unaffected), the VM itself,
+a daily auto-shutdown schedule (cost control) and a cloud-init bootstrap
+that installs Tailscale and advertises the node as an exit node.
 
 The module consumes an externally managed **anchor resource group** (by name)
 and a `subnet_id` produced by the [`networking`](../networking) module. It
@@ -43,7 +43,7 @@ module "tailscale-exit-node" {
 | context | Deployment context used for resource naming | object({project, environment, location}) | n/a |
 | rg_name | Name of the externally managed (anchor) resource group | string | n/a |
 | subnet_id | Subnet resource ID for the NIC (from the networking module) | string | n/a |
-| tailscale_auth_key | Tailscale auth key; use an ephemeral (reusable=false) key | string (sensitive) | n/a |
+| tailscale_auth_key | Tailscale auth key; use an ephemeral (reusable=false) key; visible in Terraform state | string (sensitive) | n/a |
 | admin_ssh_public_key | SSH public key (OpenSSH format) for the admin user; optional, only needed for plain OpenSSH (Tailscale SSH needs none) | string | "" |
 | tags | Tags applied to all resources | map(string) | {} |
 | admin_username | VM admin username | string | azureadmin |
@@ -65,17 +65,3 @@ module "tailscale-exit-node" {
 | private_ip_address | Private IPv4 address of the exit node |
 | public_ipv4_address | Public IPv4 address, null if disabled |
 | public_ipv6_address | Public IPv6 address, null if disabled |
-
-## Notes
-
-- The NSG is always created and attached to the NIC. With no allow rules it
-  denies all inbound traffic from the internet (Azure default rules); outbound
-  is unaffected, which is what the exit node needs. The `enable_ssh_access`
-  flag only adds a tcp/22 allow rule to this existing NSG.
-- The auth key is injected into VM `custom_data` and is therefore visible in
-  Terraform state. Use short-lived, ephemeral (reusable=false) keys.
-- Tailscale SSH is enabled in cloud-init (`--ssh`), which covers SSH over the
-  tailnet; internet-facing SSH (`enable_ssh_access`) is only needed for direct
-  access.
-- Applying this module to an existing deployment adds the NSG and its NIC
-  association — additive only; the VM and NIC are not replaced.

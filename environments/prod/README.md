@@ -1,93 +1,40 @@
 # Tailscale exit node (prod)
 
-An ephemeral Tailscale exit node on Azure — handy when you want your traffic
-to leave from another country, for example Japan. It runs on a small VM, shuts
-down nightly, and can be destroyed when you no longer need it.
-
-> **Not an anonymity tool.** Traffic exits through Azure under your own
-> subscription and account.
-
-## Prerequisites
-
-- An Azure subscription and a Tailscale account
-- Azure CLI (`az`) and Terraform ~> 1.16
-- A Tailscale auth key (ephemeral recommended)
-- An SSH public key (optional — only for plain OpenSSH)
+Deployable Terraform root module for the exit node. See the
+[root README](../../README.md) for the full walkthrough, design decisions and
+security notes.
 
 ## Deploy
 
-1. Log in and select your subscription:
+Run from this directory:
 
-   ```bash
-   az login
-   az account set --subscription "<name-or-id>"
-   ```
+```bash
+cp terraform.tfvars.example terraform.tfvars   # set location + tailscale_auth_key
+terraform init
+terraform plan
+terraform apply
+```
 
-2. Create the anchor resource group. Terraform deploys into it but does not
-   manage it, so its region does not need to match the VM's:
+`terraform destroy` removes the workload; the anchor resource group remains.
 
-   ```bash
-   az group create --name rg-tailscale-exit-node --location swedencentral
-   ```
+## Variables
 
-3. Create `terraform.tfvars` (gitignored) from the committed example:
+All variables have defaults except `tailscale_auth_key`, which is required.
 
-   ```bash
-   cp terraform.tfvars.example terraform.tfvars
-   ```
-
-   Fill in `location` (for example `japaneast`) and your secrets. Override
-   `rg_name` if you used a different resource group name. `vm_size` defaults
-   to `Standard_B1ls`, which is not available in every region.
-
-   Secrets can instead be supplied via environment variables, so they never
-   touch a file — the SSH key is optional (only for plain OpenSSH):
-
-   ```bash
-   export TF_VAR_tailscale_auth_key="tskey-auth-..."
-   export TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"   # optional
-   ```
-
-4. Apply:
-
-   ```bash
-   terraform init
-   terraform plan
-   terraform apply
-   ```
-
-## Use
-
-1. In the Tailscale admin console, approve the new machine as an exit node
-   (Machines → your node → Edit exit node → Use as exit node).
-2. On a client, select it in the Tailscale app or run:
-
-   ```bash
-   tailscale set --exit-node=<node-name>
-   ```
-
-3. Connect over the tailnet if needed:
-
-   ```bash
-   ssh azureadmin@<node-name>
-   ```
-
-## Costs and cleanup
-
-- The VM shuts down daily at 21:00 in `auto_shutdown_timezone`
-- `terraform destroy` removes the VM, network and disks. Only the anchor resource
-  group is left untouched.
+| Variable | Description | Default |
+|---|---|---|
+| `location` | Azure region for the workload. Flipping it recreates the resources; names embed the region. | `swedencentral` |
+| `rg_name` | Name of the pre-created anchor resource group. Not managed by Terraform. | `rg-tailscale-exit-node` |
+| `project` | Project name used in resource names and tags. | `tailscale` |
+| `environment` | Environment name used in resource names and tags. | `prod` |
+| `custom_tags` | Extra tags merged over the default tags (`environment`, `project`, `managed-by`). | `{}` |
+| `tailscale_auth_key` | Tailscale auth key for the exit node. Supply via `TF_VAR_tailscale_auth_key`. An ephemeral (`reusable=false`) key is recommended. | — |
+| `admin_ssh_public_key` | SSH public key for the admin user. Optional; only needed for OpenSSH. | `""` |
+| `vm_size` | Azure VM size. Not available in every region. | `Standard_B1ls` |
 
 ## Notes
 
-- The auth key is embedded in the VM's `custom_data` and is therefore visible
-  in Terraform state. Use a short-lived ephemeral key.
-- The VM's NIC carries an NSG that denies all inbound traffic from the
-  internet. SSH over the tailnet uses Tailscale SSH; internet-facing SSH is
-  opt-in via `enable_ssh_access = true` in `main.tf`.
-- State is local (`backend.tf`), so this setup assumes a single operator.
-
-## Layout
-
-- [`../../modules/networking`](../../modules/networking) — VNet and subnet
-- [`../../modules/tailscale-exit-node`](../../modules/tailscale-exit-node) — VM, networking, auto-shutdown, Tailscale bootstrap
+- Internet-facing SSH: set `enable_ssh_access = true` in `main.tf` (not a
+  variable). The NSG denies all inbound traffic until then.
+- State is local (`backend.tf`) and contains the auth key. Treat it as
+  sensitive.
