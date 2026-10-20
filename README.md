@@ -10,7 +10,24 @@ This is a small Terraform project to experiment with Azure, Tailscale and dispos
 
 Your client connects to your Tailscale tailnet and uses the Azure VM as an exit node. Internet traffic routed through the exit node leaves from Azure rather than your local network.
 
-The deployment consists of a VNet, subnet, VM, public IP addresses, NIC, NSG and an automatic shutdown schedule.
+```text
+ ┌────────┐                        ┌────────────────────────────────────────────┐
+ │ Client │─── Tailscale tailnet ─▶│           rg-tailscale-exit-node           │
+ └────────┘                        ├────────────────────────────────────────────┤
+                                   │ (anchor resource group, outside Terraform) │
+                                   │                                            │
+                                   │ Workload — managed by Terraform,           │
+                                   │ in the region you choose:                  │
+                                   │ ├─ VNet + subnet                           │
+                                   │ ├─ VM + NIC (the exit node)                │
+                                   │ ├─ Public IPv4 + IPv6                      │
+                                   │ ├─ NSG (deny-all inbound)                  │
+                                   │ └─ Daily auto-shutdown                     │
+                                   └──────────────────────┬─────────────────────┘
+                                                          │ egress
+                                                          ▼
+                                                       Internet
+```
 
 The anchor resource group is created manually; the examples use `swedencentral` for it and `japaneast` for the workload. These regions are independent and can be different.
 
